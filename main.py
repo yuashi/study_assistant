@@ -1,28 +1,55 @@
 from dotenv import load_dotenv
 from langchain_groq import ChatGroq
-from langchain_community.document_loaders import PyPDFLoader
+from langchain_huggingface import HuggingFaceEndpointEmbeddings
+from langchain_community.vectorstores import Chroma
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_text_splitters import RecursiveCharacterTextSplitter
+
 
 load_dotenv()
 
-data=PyPDFLoader("document_loaders/report.pdf")
-docs=data.load()
+embedding_model = HuggingFaceEndpointEmbeddings(
+    model="sentence-transformers/all-mpnet-base-v2"
+)
 
-splitter=RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
-chunks=splitter.split_documents(docs)
+vectorstore=Chroma(
+    persist_directory="vector_store/chroma_db",
+    embedding_function=embedding_model
+)
 
+retriever=vectorstore.as_retriever(search_type="mmr", search_kwargs={"k": 3,"fetch_k": 10,"lambda_mult": 0.5})
 
+llm=ChatGroq(model="openai/gpt-oss-120b")
 
 template=ChatPromptTemplate.from_messages([
-    ("system", "You are a helpful study assistant. Summarize the following document and answer any questions about it."),
-    ("human", "{data}")
+    ("system",
+     """You are a helpful AI assistant.
+     Use only the provided context to answer the question.
+     If the answer is not present in the context, 
+     say: "I could not find the answer in the document." and do not make up an answer.
+     """),
+    ("human",
+    """Context:
+     {context}
+
+     Question:
+     {question}
+    """)
 ])
 
-model=ChatGroq(model="openai/gpt-oss-120b")
+print("===========================RAG study assistant=========================")
+print("press 0 to exit")
 
-prompt=template.format_messages(data=chunks[0].page_content)
+while True:
+    query=input("You : ")
+    if query == '0':
+        break
 
-result=model.invoke(prompt)
+    docs=retriever.invoke(query)
+    context="\n\n".join([doc.page_content for doc in docs])
+    prompt=template.invoke({"context": context, "question": query})
 
-print(result.content)
+    response=llm.invoke(prompt)
+    print("\nAI : ", response.content)
+
+
+
